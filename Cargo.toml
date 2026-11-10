@@ -1,0 +1,38 @@
+[package]
+name = "emodule"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# 仅用于开发时加速链接：`cargo run --features dev`
+# `bevy/dynamic_linking`（bevy_dylib）要求 panic="unwind"，
+# 与 release profile 的 panic="abort" 不兼容，因此不能在 release 中启用。
+dev = ["bevy/dynamic_linking"]
+
+[dependencies]
+bevy = { version = "0.20.1", features = ["bevy_feathers", "webp"] }
+bevy_common_assets = { version = "0.18.0", features = ["xml"] }
+bincode = "2.0"
+rust-ini = "0.21.3"
+serde = { version = "1.0.229", features = ["derive"] }
+
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+split-debuginfo = "off"
+debug-assertions = false
+overflow-checks = false
+incremental = false
+rpath = false

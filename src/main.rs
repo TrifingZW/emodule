@@ -40,7 +40,11 @@ fn main() {
         .add_systems(Startup, ui::root_scene.spawn())
         .add_systems(
             Update,
-            (map::draw_grid, ui::update_status.run_if(resource_changed::<EditorState>)),
+            (
+                map::draw_grid,
+                ui::update_status.run_if(resource_changed::<EditorState>),
+                camera::smooth_zoom,
+            ),
         )
         .run();
 }

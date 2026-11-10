@@ -12,7 +12,22 @@ use bevy::{
 
 /// 标记负责渲染地图的相机。
 #[derive(Component, Clone, Default)]
+#[require(CameraZoom)]
 pub(crate) struct MapCamera;
+
+/// 相机缩放缓动的目标值。
+#[derive(Component, Clone)]
+pub(crate) struct CameraZoom {
+    target: f32,
+}
+
+impl Default for CameraZoom {
+    fn default() -> Self {
+        Self {
+            target: DEFAULT_ZOOM,
+        }
+    }
+}
 
 /// 最低正交缩放值，对应最近的缩放级别。
 const MIN_ZOOM: f32 = 0.1;
@@ -28,6 +43,12 @@ const LINE_ZOOM: f32 = 0.1;
 
 /// 鼠标滚轮每像素的缩放量。
 const PIXEL_ZOOM: f32 = 0.002;
+
+/// 缩放缓动速率，值越大跟随目标越快。
+const ZOOM_SMOOTHING: f32 = 15.0;
+
+/// 缩放与目标的差值低于该阈值时直接对齐，避免无意义的持续更新。
+const ZOOM_SNAP_EPSILON: f32 = 1e-4;
 
 /// 按住鼠标中键拖拽时平移地图相机。
 pub(crate) fn pan_camera(
@@ -51,26 +72,45 @@ pub(crate) fn pan_camera(
 /// 响应鼠标滚轮滚动缩放地图相机。
 pub(crate) fn zoom_camera(
     scroll: On<PointerScroll>,
-    mut camera: Single<&mut Projection, With<MapCamera>>,
+    mut zoom: Single<&mut CameraZoom, With<MapCamera>>,
 ) {
     let Some(amount) = zoom_amount(scroll.unit, scroll.y) else {
         return;
     };
 
-    let Projection::Orthographic(orthographic) = &mut **camera else {
+    // 基于目标值累积缩放，保证缓动期间的连续滚动不会丢失增量。
+    zoom.target = (zoom.target * (-amount).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
+}
+
+/// 每帧将正交缩放指数缓动到目标值。
+pub(crate) fn smooth_zoom(
+    time: Res<Time>,
+    camera: Single<(&mut Projection, &mut CameraZoom), With<MapCamera>>,
+) {
+    let (mut projection, zoom) = camera.into_inner();
+    let Projection::Orthographic(orthographic) = &mut *projection else {
         return;
     };
 
-    orthographic.scale = (orthographic.scale * (-amount).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
+    let delta = zoom.target - orthographic.scale;
+    if delta.abs() < ZOOM_SNAP_EPSILON {
+        orthographic.scale = zoom.target;
+        return;
+    }
+
+    // 指数缓动与帧率无关，不同刷新率下收敛速度一致。
+    let factor = 1.0 - (-ZOOM_SMOOTHING * time.delta_secs()).exp();
+    orthographic.scale += delta * factor;
 }
 
 /// 恢复地图相机的位置与缩放。
 pub(crate) fn reset_camera(
     _: On<Activate>,
-    camera: Single<(&mut Transform, &mut Projection), With<MapCamera>>,
+    camera: Single<(&mut Transform, &mut Projection, &mut CameraZoom), With<MapCamera>>,
 ) {
-    let (mut transform, mut projection) = camera.into_inner();
+    let (mut transform, mut projection, mut zoom) = camera.into_inner();
     transform.translation = Vec3::ZERO;
+    zoom.target = DEFAULT_ZOOM;
 
     if let Projection::Orthographic(orthographic) = &mut *projection {
         orthographic.scale = DEFAULT_ZOOM;

@@ -55,7 +55,7 @@ pub(crate) fn pan_camera(
     drag: On<PointerDrag>,
     camera: Single<(&mut Transform, &mut Projection), With<MapCamera>>,
 ) {
-    if drag.button != PointerButton::Middle || !drag.delta.is_finite() {
+    if drag.button != PointerButton::Secondary || !drag.delta.is_finite() {
         return;
     }
 

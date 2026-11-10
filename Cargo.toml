@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.20.1", features = ["bevy_feathers", "webp"] }
+# 关闭默认特性，仅保留实际使用的集合：
+# 2d  — 精灵、Mesh2d 与 2D 渲染管线（含 Camera2d、图片、文本）
+# ui  — UI 渲染栈，Feathers 组件所依赖
+# bevy_feathers / webp 为独立可选特性，需显式开启。
+bevy = { version = "0.20.1", default-features = false, features = ["2d", "ui", "bevy_feathers", "webp"] }
 bevy_common_assets = { version = "0.18.0", features = ["xml"] }
 bincode = "2.0"
 rust-ini = "0.21.3"

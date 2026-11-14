@@ -4,6 +4,7 @@
 //! 场景数据（`.btl`）、地图配置与图集资源的加载，以及六边形地图的渲染。
 //! 与 egui 绑定的旧编辑器界面不再保留，交互统一由编辑器的 Bevy UI 承担。
 
+mod attachments;
 mod bin;
 mod btl;
 mod btl_data;
@@ -24,7 +25,15 @@ use bevy_common_assets::xml::XmlAssetPlugin;
 
 use crate::state::SelectedTile;
 
+pub(crate) use attachments::{
+    Attachment, attachments_at, field_names, field_value, set_field_value,
+};
+pub(crate) use bin::Bin;
+pub(crate) use btl::Btl;
 pub(crate) use render::{DirtyTiles, refresh_tiles};
+pub(crate) use tile::{
+    TileSummary, set_tile_field, tile_field_names, tile_field_value, tile_summary,
+};
 
 use crate::wc4::{
     bin::load_wc4_bin,

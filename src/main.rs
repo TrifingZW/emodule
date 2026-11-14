@@ -60,6 +60,10 @@ fn main() {
             (
                 map::draw_grid,
                 ui::update_status.run_if(resource_changed::<EditorState>),
+                ui::update_tile_details
+                    .run_if(resource_changed::<SelectedTile>)
+                    .run_if(ui::pointer_released),
+                ui::write_fields_from_text,
                 camera::smooth_zoom,
             ),
         )

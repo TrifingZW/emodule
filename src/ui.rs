@@ -10,10 +10,11 @@ use bevy::{feathers::palette, input_focus::tab_navigation::TabGroup, prelude::*}
 
 use crate::camera::MapCamera;
 
+pub(crate) use inspector::{pointer_released, update_tile_details, write_fields_from_text};
 pub(crate) use status::update_status;
 
 /// 检查器面板宽度（逻辑像素）。
-pub(crate) const INSPECTOR_WIDTH: f32 = 280.0;
+pub(crate) const INSPECTOR_WIDTH: f32 = 350.0;
 
 /// 视口清屏颜色。
 pub(crate) const VIEWPORT_CLEAR_COLOR: Color = palette::BLACK;
@@ -29,14 +30,11 @@ pub(crate) const BORDER_WIDTH: f32 = 2.0;
 
 pub(crate) const BORDER_RADIUS: f32 = 6.0;
 
-/// 紧凑控件之间的超小间距。
-pub(crate) const SPACE_XS: f32 = 2.0;
-
 /// 相关控件之间的小间距。
 pub(crate) const SPACE_SM: f32 = 4.0;
 
 /// 同一行控件之间的间距。
-pub(crate) const CONTROL_GAP: f32 = 4.0;
+pub(crate) const CONTROL_GAP: f32 = 6.0;
 
 /// 紧凑表面的中等间距。
 pub(crate) const SPACE_MD: f32 = 6.0;
@@ -71,6 +69,7 @@ fn editor_root() -> impl Scene {
             --
             Node {
                 flex_grow: 1.0,
+                flex_basis: px(0),
                 min_height: px(0),
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,

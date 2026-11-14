@@ -18,7 +18,7 @@ use bevy::{
 use crate::{
     camera::reset_camera,
     ui::{
-        BORDER_WIDTH, CONTROL_GAP, SPACE_SM,
+        BORDER_WIDTH, CONTROL_GAP, SPACE_MD,
         dialogs::{show_about, spawn_quit_dialog},
     },
 };
@@ -30,7 +30,7 @@ pub(super) fn menu_bar() -> impl Scene {
             display: Display::Flex,
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
-            padding: UiRect::axes(px(SPACE_SM), px(SPACE_SM)),
+            padding: UiRect::axes(px(SPACE_MD), px(SPACE_MD)),
             column_gap: px(CONTROL_GAP),
             border: UiRect::bottom(px(BORDER_WIDTH)),
         }

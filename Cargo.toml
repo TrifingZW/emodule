@@ -9,7 +9,7 @@ edition = "2024"
 # ui  — UI 渲染栈，Feathers 组件所依赖
 # bevy_feathers / webp 为独立可选特性，需显式开启。
 # complex_script_segmentation — 中日文断行模型，缺失时每帧打印 ICU4X 数据错误。
-bevy = { version = "0.20.1", default-features = false, features = ["2d", "ui", "bevy_feathers", "webp", "debug", "complex_script_segmentation"] }
+bevy = { version = "0.20.1", default-features = false, features = ["2d", "ui", "bevy_feathers", "webp", "complex_script_segmentation"] }
 bevy_common_assets = { version = "0.18.0", features = ["xml"] }
 bincode = "2.0"
 rust-ini = "0.21.3"
@@ -19,7 +19,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 # 仅用于开发时加速链接与诊断：`cargo run --features dev`
 # `bevy/dynamic_linking`（bevy_dylib）要求 panic="unwind"，
 # 与 release profile 的 panic="abort" 不兼容，因此不能在 release 中启用。
-dev = ["bevy/dynamic_linking"]
+# `bevy/debug` 为 ECS 与渲染附加调试信息，发布构建可以省掉。
+dev = ["bevy/dynamic_linking", "bevy/debug"]
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

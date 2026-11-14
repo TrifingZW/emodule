@@ -82,19 +82,20 @@ fn viewport_toolbar() -> impl Scene {
         ThemeBackgroundColor(tokens::PANE_HEADER_BG)
         ThemeBorderColor(tokens::PANE_HEADER_BORDER)
         Children [
-            @tool_button("Select", Tool::Select, ButtonVariant::Primary)
+            @tool_button("选择", Tool::Select, ButtonVariant::Primary)
             --
-            @tool_button("Move", Tool::Move, ButtonVariant::Normal)
+            @tool_button("移动", Tool::Move, ButtonVariant::Normal)
             --
-            @tool_button("Rotate", Tool::Rotate, ButtonVariant::Normal)
+            @tool_button("旋转", Tool::Rotate, ButtonVariant::Normal)
             --
-            @tool_button("Scale", Tool::Scale, ButtonVariant::Normal)
+            @tool_button("缩放", Tool::Scale, ButtonVariant::Normal)
             --
             @pane_header_divider()
             --
             @FeathersCheckbox {
-                @caption: bsn! { @caption("Grid") },
+                @caption: bsn! { @caption("网格") },
             }
+            on(checkbox_self_update)
             on(on_grid_change)
         ]
     }

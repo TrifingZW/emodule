@@ -41,30 +41,30 @@ pub(super) fn menu_bar() -> impl Scene {
             @FeathersMenu
             Children [
                 @FeathersMenuButton {
-                    @caption: bsn! { @caption("File") }
+                    @caption: bsn! { @caption("文件") }
                 }
                 --
                 @FeathersMenuPopup
                 Children [
                     @FeathersMenuItem {
-                        @caption: bsn! { @caption("New") }
+                        @caption: bsn! { @caption("新建") }
                     }
                     on(new_map)
                     --
                     @FeathersMenuItem {
-                        @caption: bsn! { @caption("Open...") }
+                        @caption: bsn! { @caption("打开...") }
                     }
                     on(open_map)
                     --
                     @FeathersMenuItem {
-                        @caption: bsn! { @caption("Save") }
+                        @caption: bsn! { @caption("保存") }
                     }
                     on(save_map)
                     --
                     @FeathersMenuDivider
                     --
                     @FeathersMenuItem {
-                        @caption: bsn! { @caption("Quit") }
+                        @caption: bsn! { @caption("退出") }
                     }
                     on(spawn_quit_dialog)
                 ]
@@ -73,13 +73,13 @@ pub(super) fn menu_bar() -> impl Scene {
             @FeathersMenu
             Children [
                 @FeathersMenuButton {
-                    @caption: bsn! { @caption("View") }
+                    @caption: bsn! { @caption("视图") }
                 }
                 --
                 @FeathersMenuPopup
                 Children [
                     @FeathersMenuItem {
-                        @caption: bsn! { @caption("Reset Camera") }
+                        @caption: bsn! { @caption("重置视角") }
                     }
                     on(reset_camera)
                 ]
@@ -88,13 +88,13 @@ pub(super) fn menu_bar() -> impl Scene {
             @FeathersMenu
             Children [
                 @FeathersMenuButton {
-                    @caption: bsn! { @caption("Help") }
+                    @caption: bsn! { @caption("帮助") }
                 }
                 --
                 @FeathersMenuPopup
                 Children [
                     @FeathersMenuItem {
-                        @caption: bsn! { @caption("About") }
+                        @caption: bsn! { @caption("关于") }
                     }
                     on(show_about)
                 ]

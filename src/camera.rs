@@ -7,6 +7,7 @@ use bevy::{
         pointer::PointerButton,
     },
     prelude::*,
+    ui::{ComputedNode, UiGlobalTransform},
     ui_widgets::Activate,
 };
 
@@ -14,6 +15,10 @@ use bevy::{
 #[derive(Component, Clone, Default)]
 #[require(CameraZoom)]
 pub(crate) struct MapCamera;
+
+/// 标记地图可视区域节点，用于计算缩放锚点。
+#[derive(Component, Clone, Default)]
+pub(crate) struct MapViewport;
 
 /// 相机缩放缓动的目标值。
 #[derive(Component, Clone)]
@@ -82,25 +87,45 @@ pub(crate) fn zoom_camera(
     zoom.target = (zoom.target * (-amount).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
 }
 
-/// 每帧将正交缩放指数缓动到目标值。
+/// 每帧将正交缩放指数缓动到目标值，并保持视口中心的地图位置不变。
 pub(crate) fn smooth_zoom(
     time: Res<Time>,
-    camera: Single<(&mut Projection, &mut CameraZoom), With<MapCamera>>,
+    window: Single<&Window>,
+    viewport: Single<(&ComputedNode, &UiGlobalTransform), With<MapViewport>>,
+    camera: Single<(&mut Transform, &mut Projection, &mut CameraZoom), With<MapCamera>>,
 ) {
-    let (mut projection, zoom) = camera.into_inner();
+    let (mut transform, mut projection, zoom) = camera.into_inner();
+    let (computed, ui_transform) = viewport.into_inner();
     let Projection::Orthographic(orthographic) = &mut *projection else {
         return;
     };
 
-    let delta = zoom.target - orthographic.scale;
-    if delta.abs() < ZOOM_SNAP_EPSILON {
-        orthographic.scale = zoom.target;
+    let old_scale = orthographic.scale;
+    let delta = zoom.target - old_scale;
+    let new_scale = if delta.abs() < ZOOM_SNAP_EPSILON {
+        zoom.target
+    } else {
+        // 指数缓动与帧率无关，不同刷新率下收敛速度一致。
+        let factor = 1.0 - (-ZOOM_SMOOTHING * time.delta_secs()).exp();
+        old_scale + delta * factor
+    };
+
+    if new_scale == old_scale {
         return;
     }
 
-    // 指数缓动与帧率无关，不同刷新率下收敛速度一致。
-    let factor = 1.0 - (-ZOOM_SMOOTHING * time.delta_secs()).exp();
-    orthographic.scale += delta * factor;
+    orthographic.scale = new_scale;
+
+    // 相机渲染整个窗口，需补偿视口中心与窗口中心的偏移，使缩放围绕视口中心进行。
+    if computed.is_empty() {
+        return;
+    }
+
+    let viewport_center = ui_transform.affine().translation / window.scale_factor();
+    let offset = viewport_center - window.size() * 0.5;
+    let scale_delta = old_scale - new_scale;
+    transform.translation.x += offset.x * scale_delta;
+    transform.translation.y -= offset.y * scale_delta;
 }
 
 /// 恢复地图相机的位置与缩放。

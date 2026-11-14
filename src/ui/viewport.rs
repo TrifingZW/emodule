@@ -9,10 +9,11 @@ use bevy::{
         tokens,
     },
     prelude::*,
+    ui_widgets::checkbox_self_update,
 };
 
 use crate::{
-    camera::{pan_camera, zoom_camera},
+    camera::{MapViewport, pan_camera, zoom_camera},
     state::{Tool, ToolButton, on_grid_change, on_tool_activate},
     ui::BORDER_RADIUS,
     wc4::selection::select_tile_on_click,
@@ -31,6 +32,7 @@ pub(super) fn viewport() -> impl Scene {
             align_items: AlignItems::Stretch,
             justify_content: JustifyContent::Start,
         }
+        MapViewport
         Children [
             // 覆盖层后方的输入层：左键点选地块，中键拖拽平移，滚轮缩放。
             Node {

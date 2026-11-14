@@ -16,6 +16,7 @@ use bevy::{
 
 use crate::{
     camera::MapCamera,
+    font::EditorFont,
     state::SelectedTile,
     wc4::{
         bin::Bin,
@@ -220,6 +221,8 @@ pub(crate) struct RefreshContext<'w> {
     config: Option<Res<'w, Wc4Config>>,
     /// 地图资源。
     resources: Option<Res<'w, Wc4Resources>>,
+    /// 全局字体。
+    font: Option<Res<'w, EditorFont>>,
     /// 图集配置资源。
     image_xml: Res<'w, Assets<ImageXml>>,
 }
@@ -242,6 +245,7 @@ pub(crate) fn spawn_wc4_map(
     btl: Option<Res<Btl>>,
     config: Res<Wc4Config>,
     resources: Res<Wc4Resources>,
+    font: Res<EditorFont>,
     mut assets: MapAssets,
 ) {
     let (Some(bin), Some(btl)) = (bin, btl) else {
@@ -305,7 +309,7 @@ pub(crate) fn spawn_wc4_map(
     }
 
     // 3) 城市与交互标记。
-    spawn_cities(&mut commands, &btl, &bin, &config, &resources, &assets.image_xml);
+    spawn_cities(&mut commands, &btl, &bin, &config, &resources, &font, &assets.image_xml);
     commands.spawn((
         TileCursor,
         Sprite::from_image(resources.cursor.clone()),
@@ -670,6 +674,7 @@ impl<'a> CityScene<'a> {
         bin: &Bin,
         config: &'a Wc4Config,
         resources: &'a Wc4Resources,
+        font: &EditorFont,
         image_xml: &'a Assets<ImageXml>,
     ) -> Option<Self> {
         let buildings = image_xml.get(&resources.buildings.image_xml)?;
@@ -680,7 +685,7 @@ impl<'a> CityScene<'a> {
             config,
             resources,
             frames: city_frames(buildings),
-            font: TextFont::from_font_size(CITY_LABEL_FONT_SIZE).with_font(resources.font.clone()),
+            font: font.text_font(CITY_LABEL_FONT_SIZE),
             width,
         })
     }
@@ -726,9 +731,10 @@ fn spawn_cities(
     bin: &Bin,
     config: &Wc4Config,
     resources: &Wc4Resources,
+    font: &EditorFont,
     image_xml: &Assets<ImageXml>,
 ) {
-    let Some(scene) = CityScene::new(btl, bin, config, resources, image_xml) else {
+    let Some(scene) = CityScene::new(btl, bin, config, resources, font, image_xml) else {
         return;
     };
 
@@ -854,9 +860,9 @@ pub(crate) fn refresh_tiles(
     }
     commands.spawn_batch(batch);
 
-    if let (Some(config), Some(resources)) =
-        (context.config.as_deref(), context.resources.as_deref())
-        && let Some(scene) = CityScene::new(btl, bin, config, resources, &context.image_xml)
+    if let (Some(config), Some(resources), Some(font)) =
+        (context.config.as_deref(), context.resources.as_deref(), context.font.as_deref())
+        && let Some(scene) = CityScene::new(btl, bin, config, resources, font, &context.image_xml)
     {
         let existing =
             cities.iter().map(|(entity, city)| ((city.index, city.part), entity)).collect();

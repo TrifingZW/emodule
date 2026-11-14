@@ -3,6 +3,7 @@
 //! 编辑器由菜单栏、带浮动工具栏的地图视口、检查器和状态栏组成。
 
 mod camera;
+mod font;
 mod map;
 mod state;
 mod ui;
@@ -14,6 +15,7 @@ use bevy::{
     prelude::*,
 };
 
+use crate::font::EditorFontPlugin;
 use crate::state::{EditorState, SelectedTile};
 use crate::ui::VIEWPORT_CLEAR_COLOR;
 use crate::wc4::Wc4Plugin;
@@ -47,6 +49,7 @@ fn main() {
                 ..default()
             }),
             FeathersPlugins,
+            EditorFontPlugin,
             Wc4Plugin,
         ))
         .insert_resource(FallbackErrorHandler(handle_error))

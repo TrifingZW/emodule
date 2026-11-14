@@ -5,7 +5,6 @@ use bevy::{
     image::Image,
     prelude::*,
     reflect::TypePath,
-    text::Font,
 };
 use serde::Deserialize;
 
@@ -27,8 +26,6 @@ const LAND_IMAGE_PATH: &str = "map_land.png";
 const SEA_IMAGE_PATH: &str = "map_sea.png";
 /// 地块指示图标。
 const CURSOR_IMAGE_PATH: &str = "anim_status.png";
-/// 城市名称使用的字体。
-const FONT_PATH: &str = "HarmonyOS_SansSC_Bold.ttf";
 
 /// 图集切片配置。
 #[derive(Asset, TypePath, Debug, Deserialize)]
@@ -88,8 +85,6 @@ pub(crate) struct Wc4Resources {
     pub(crate) sea: Handle<Image>,
     /// 地块指示图标。
     pub(crate) cursor: Handle<Image>,
-    /// 城市名称字体。
-    pub(crate) font: Handle<Font>,
 }
 
 /// 加载 WC4 地图资源。
@@ -106,6 +101,5 @@ pub(crate) fn load_wc4_resources(mut commands: Commands, asset_server: Res<Asset
         land: asset_server.load(LAND_IMAGE_PATH),
         sea: asset_server.load(SEA_IMAGE_PATH),
         cursor: asset_server.load(CURSOR_IMAGE_PATH),
-        font: asset_server.load(FONT_PATH),
     });
 }

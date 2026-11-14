@@ -37,6 +37,7 @@ impl Tool {
 pub(crate) struct EditorState {
     tool: Tool,
     show_grid: bool,
+    show_provinces: bool,
 }
 
 impl Default for EditorState {
@@ -45,6 +46,7 @@ impl Default for EditorState {
         Self {
             tool: Tool::default(),
             show_grid: false,
+            show_provinces: false,
         }
     }
 }
@@ -53,6 +55,11 @@ impl EditorState {
     /// 返回视口网格是否启用。
     pub(crate) const fn grid_enabled(&self) -> bool {
         self.show_grid
+    }
+
+    /// 返回省界是否启用。
+    pub(crate) const fn province_boundaries_enabled(&self) -> bool {
+        self.show_provinces
     }
 
     /// 将当前状态格式化为状态栏文本。
@@ -118,6 +125,11 @@ pub(crate) fn on_grid_change(change: On<ValueChange<bool>>, mut state: ResMut<Ed
     state.show_grid = change.value;
 }
 
+/// 更新省界可见性。
+pub(crate) fn on_province_change(change: On<ValueChange<bool>>, mut state: ResMut<EditorState>) {
+    state.show_provinces = change.value;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +147,7 @@ mod tests {
         let state = EditorState {
             tool: Tool::Rotate,
             show_grid: true,
+            show_provinces: false,
         };
 
         assert_eq!(state.status_line(), "Tool: Rotate | Grid: On");

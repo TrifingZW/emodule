@@ -62,6 +62,7 @@ fn main() {
             Update,
             (
                 map::draw_grid,
+                map::draw_province_boundaries,
                 ui::update_status.run_if(resource_changed::<EditorState>),
                 ui::update_tile_details
                     .run_if(resource_changed::<SelectedTile>)

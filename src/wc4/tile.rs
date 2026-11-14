@@ -63,6 +63,11 @@ pub(crate) fn tile_field_names() -> &'static [&'static str] {
     TILE_FIELDS
 }
 
+/// 返回地块所属省份，坐标或数据不可用时返回 `None`。
+pub(crate) fn province_at(btl: &Btl, bin: &Bin, grid: IVec2) -> Option<i16> {
+    btl.province_vec.get(scene_index(btl, bin, grid)?).copied()
+}
+
 /// 读取地块字段值。
 ///
 /// 网格坐标无效或字段不存在时返回 `None`。

@@ -46,6 +46,8 @@ const Z_ROW_BIAS: f32 = 0.001;
 const Z_COLUMN_BIAS: f32 = 0.000_001;
 /// 地形层（基础 > 装饰 A > 装饰 B）的相对深度。
 const Z_TILE_LAYERS: [f32; 3] = [3.0, 2.0, 1.0];
+/// 网格覆盖层的深度，位于地块及其颜色层之上、城市与交互标记之下。
+pub(crate) const Z_GRID: f32 = 4.5;
 /// 城市名称与城市精灵的距离。
 const CITY_LABEL_OFFSET: f32 = 50.0;
 /// 城市名称的字号（逻辑像素）。

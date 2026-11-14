@@ -15,6 +15,7 @@ use crate::{
     camera::{pan_camera, zoom_camera},
     state::{Tool, ToolButton, on_grid_change, on_tool_activate},
     ui::BORDER_RADIUS,
+    wc4::selection::select_tile_on_click,
 };
 
 use super::{BORDER_WIDTH, CONTROL_GAP, SPACE_LG, SPACE_MD, SPACE_SM, VIEWPORT_INSET};
@@ -31,7 +32,7 @@ pub(super) fn viewport() -> impl Scene {
             justify_content: JustifyContent::Start,
         }
         Children [
-            // 覆盖层后方的输入层：中键拖拽平移，滚轮缩放。
+            // 覆盖层后方的输入层：左键点选地块，中键拖拽平移，滚轮缩放。
             Node {
                 position_type: PositionType::Absolute,
                 left: px(0),
@@ -39,6 +40,7 @@ pub(super) fn viewport() -> impl Scene {
                 top: px(0),
                 bottom: px(0),
             }
+            on(select_tile_on_click)
             on(pan_camera)
             on(zoom_camera)
             --

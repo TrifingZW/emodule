@@ -10,8 +10,11 @@ mod btl_data;
 mod codec;
 mod config;
 mod grid;
+mod numeric;
 mod render;
 mod resource;
+pub(crate) mod selection;
+mod tile;
 
 use std::fmt;
 
@@ -19,13 +22,17 @@ use bevy::prelude::*;
 use bevy::sprite_render::Material2dPlugin;
 use bevy_common_assets::xml::XmlAssetPlugin;
 
+use crate::state::SelectedTile;
+
+pub(crate) use render::{DirtyTiles, refresh_tiles};
+
 use crate::wc4::{
     bin::load_wc4_bin,
     btl::load_wc4_btl,
     config::{TerrainXml, load_wc4_config},
     render::{
         InstanceMaterial, SeaMaterial, Wc4MapSpawned, spawn_wc4_map, update_city_label_scale,
-        update_tile_cursor,
+        update_selection_marker, update_tile_cursor,
     },
     resource::{ImageXml, load_wc4_resources},
 };
@@ -96,6 +103,7 @@ impl Plugin for Wc4Plugin {
             Material2dPlugin::<InstanceMaterial>::default(),
             Material2dPlugin::<SeaMaterial>::default(),
         ))
+        .init_resource::<DirtyTiles>()
         .add_systems(Startup, (load_wc4_config, load_wc4_resources, load_wc4_bin, load_wc4_btl))
         .add_systems(
             Update,
@@ -103,8 +111,10 @@ impl Plugin for Wc4Plugin {
                 spawn_wc4_map.run_if(not(resource_exists::<Wc4MapSpawned>)),
                 update_city_label_scale,
                 update_tile_cursor,
+                update_selection_marker.run_if(resource_changed::<SelectedTile>),
             ),
-        );
+        )
+        .add_systems(PostUpdate, refresh_tiles);
     }
 }
 

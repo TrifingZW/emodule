@@ -429,7 +429,7 @@ pub(crate) struct City {
 }
 
 /// 军队数据。
-#[derive(Debug, Encode, Decode)]
+#[derive(Debug, Default, Encode, Decode)]
 pub(crate) struct Army {
     /// 坐标
     pub(crate) coordinate: i16,
@@ -568,7 +568,7 @@ pub(crate) struct Army {
 }
 
 /// 陷阱数据。
-#[derive(Debug, Encode, Decode)]
+#[derive(Debug, Default, Encode, Decode)]
 pub(crate) struct Pitfall {
     /// 坐标
     pub(crate) coordinate: i16,
@@ -656,7 +656,7 @@ pub(crate) struct Affair {
 }
 
 /// 援军数据。
-#[derive(Debug, Encode, Decode)]
+#[derive(Debug, Default, Encode, Decode)]
 pub(crate) struct Reinforcement {
     /// 坐标
     pub(crate) coordinate: i32,
@@ -738,7 +738,7 @@ pub(crate) struct Reinforcement {
 }
 
 /// 空袭数据。
-#[derive(Debug, Encode, Decode)]
+#[derive(Debug, Default, Encode, Decode)]
 pub(crate) struct AirRaid {
     /// 坐标
     pub(crate) coordinate: i32,
@@ -760,7 +760,7 @@ pub(crate) struct AirRaid {
 }
 
 /// 兵种放置数据。
-#[derive(Debug, Encode, Decode)]
+#[derive(Debug, Default, Encode, Decode)]
 pub(crate) struct ArmyPlacement {
     /// 坐标
     pub(crate) coordinate: i16,
@@ -782,7 +782,7 @@ pub(crate) struct ArmyPlacement {
 }
 
 /// 首都数据。
-#[derive(Debug, Encode, Decode)]
+#[derive(Debug, Default, Encode, Decode)]
 pub(crate) struct Capital {
     /// 坐标
     pub(crate) coordinate: i16,

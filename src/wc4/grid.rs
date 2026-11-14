@@ -65,6 +65,20 @@ pub(crate) fn world_to_grid(position: Vec2) -> IVec2 {
     IVec2::new(q, row)
 }
 
+/// 将窗口光标位置换算为网格坐标。
+///
+/// 光标不在窗口内，或相机无法投影该位置时返回 `None`。
+pub(crate) fn cursor_to_grid(
+    window: &Window,
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+) -> Option<IVec2> {
+    let viewport_position = window.cursor_position()?;
+    let world_position = camera.viewport_to_world_2d(camera_transform, viewport_position).ok()?;
+
+    Some(world_to_grid(world_position))
+}
+
 /// 将分数轴坐标取整为最近的整数轴坐标。
 fn round_axial(q: f32, r: f32) -> (i32, i32) {
     let s = -q - r;

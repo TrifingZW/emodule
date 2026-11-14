@@ -9,16 +9,31 @@ mod ui;
 mod wc4;
 
 use bevy::{
+    ecs::error::{BevyError, ErrorContext, FallbackErrorHandler},
     feathers::{FeathersPlugins, dark_theme::create_dark_theme, theme::UiTheme},
     prelude::*,
 };
 
-use crate::state::EditorState;
+use crate::state::{EditorState, SelectedTile};
 use crate::ui::VIEWPORT_CLEAR_COLOR;
 use crate::wc4::Wc4Plugin;
 
 /// 主窗口标题。
 const WINDOW_TITLE: &str = "EModule";
+
+/// 处理未被单独处理的 ECS 错误。
+///
+/// 命令错误通常来自延迟执行时目标实体已被销毁，记录命令名与完整回溯后继续运行；
+/// 其余错误保持默认的崩溃行为，避免掩盖真正的逻辑问题。
+fn handle_error(error: BevyError, context: ErrorContext) {
+    if matches!(context, ErrorContext::Command { .. }) {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        error!("{context} 失败: {error}\n{backtrace}");
+        return;
+    }
+
+    bevy::ecs::error::panic(error, context);
+}
 
 /// 启动编辑器应用。
 fn main() {
@@ -34,9 +49,11 @@ fn main() {
             FeathersPlugins,
             Wc4Plugin,
         ))
+        .insert_resource(FallbackErrorHandler(handle_error))
         .insert_resource(UiTheme(create_dark_theme()))
         .insert_resource(ClearColor(VIEWPORT_CLEAR_COLOR))
         .init_resource::<EditorState>()
+        .init_resource::<SelectedTile>()
         .add_systems(Startup, ui::root_scene.spawn())
         .add_systems(
             Update,

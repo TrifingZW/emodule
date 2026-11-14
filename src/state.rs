@@ -139,6 +139,25 @@ impl EditorState {
     }
 }
 
+/// 当前选中的地块。
+///
+/// 坐标为地图网格坐标（列、行），与网格换算模块的输出保持一致；
+/// `None` 表示未选中任何地块。
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SelectedTile(Option<IVec2>);
+
+impl SelectedTile {
+    /// 创建选中指定地块的状态。
+    pub(crate) const fn at(tile: IVec2) -> Self {
+        Self(Some(tile))
+    }
+
+    /// 返回选中的网格坐标，未选中时返回 `None`。
+    pub(crate) const fn get(self) -> Option<IVec2> {
+        self.0
+    }
+}
+
 /// 标记激活某个工具的视口工具栏按钮。
 #[derive(Component, Clone, Copy, Default)]
 pub(crate) struct ToolButton(pub(crate) Tool);

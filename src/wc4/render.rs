@@ -1,6 +1,6 @@
 //! WC4 六边形地图渲染。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -16,13 +16,14 @@ use bevy::{
 
 use crate::{
     camera::MapCamera,
+    state::SelectedTile,
     wc4::{
         bin::Bin,
         btl::Btl,
         btl_data::City,
         config::{TerrainXml, Wc4Config},
         grid::{
-            GRID_HEIGHT, GRID_WIDTH, grid_to_world, grid_world_size, index_to_grid, world_to_grid,
+            GRID_HEIGHT, GRID_WIDTH, cursor_to_grid, grid_to_world, grid_world_size, index_to_grid,
         },
         resource::{ImageInfo, ImageXml, Wc4Atlas, Wc4Resources},
     },
@@ -34,6 +35,8 @@ const Z_LAND_BASE: f32 = -10.0;
 const Z_SEA_BASE: f32 = -9.0;
 /// 城市精灵的深度。
 const Z_CITY: f32 = 5.0;
+/// 选中地块标记的深度。
+const Z_TILE_SELECTION: f32 = 10.0;
 /// 地块指示图标的深度。
 const Z_TILE_CURSOR: f32 = 11.0;
 /// 相邻行的深度间隔，保证行优先的稳定排序。
@@ -52,6 +55,9 @@ const INSTANCE_SHADER_PATH: &str = "shaders/automatic_instancing.wesl";
 /// 海洋遮罩着色器路径。
 const SEA_SHADER_PATH: &str = "shaders/land_sea.wesl";
 
+/// 选中标记的着色，用于区分悬停与选中。
+const SELECTION_TINT: Color = Color::srgb(1.0, 0.78, 0.25);
+
 /// 标记 WC4 地图已经生成。
 #[derive(Resource)]
 pub(crate) struct Wc4MapSpawned;
@@ -60,12 +66,67 @@ pub(crate) struct Wc4MapSpawned;
 #[derive(Component)]
 pub(crate) struct CityName;
 
+/// 城市实体承担的渲染部分。
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CityPart {
+    /// 城市外观精灵。
+    Sprite,
+    /// 城市名称文本。
+    Label,
+}
+
+/// 标记城市精灵或名称实体，记录其对应的城市下标。
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CityObject {
+    /// 城市在 `Btl::city_vec` 中的下标。
+    pub(crate) index: usize,
+    /// 实体承担的渲染部分。
+    pub(crate) part: CityPart,
+}
+
 /// 标记跟随鼠标的地块指示图标。
 #[derive(Component)]
 pub(crate) struct TileCursor;
 
+/// 标记当前选中地块的图标。
+#[derive(Component)]
+pub(crate) struct SelectionMarker;
+
+/// 标记属于某个地块的渲染实体。
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TileObject {
+    /// 所属地块的网格坐标。
+    pub(crate) grid: IVec2,
+}
+
+/// 待重建渲染的地块集合。
+#[derive(Resource, Default)]
+pub(crate) struct DirtyTiles(HashSet<IVec2>);
+
+impl DirtyTiles {
+    /// 登记需要重建渲染的地块。
+    pub(crate) fn mark(&mut self, grid: IVec2) {
+        self.0.insert(grid);
+    }
+}
+
+/// 地块增量刷新所需的渲染资源。
+#[derive(Resource)]
+pub(crate) struct Wc4Render {
+    /// 地形图集。
+    terrain: PreparedAtlas,
+    /// 植被图集。
+    plant: PreparedAtlas,
+    /// 地形材质。
+    terrain_material: Handle<InstanceMaterial>,
+    /// 植被材质。
+    plant_material: Handle<InstanceMaterial>,
+    /// 海洋遮罩纹理。
+    sea_mask: Option<Handle<Image>>,
+}
+
 /// 单个地形网格实体所需的组件。
-type TileBundle = (Mesh2d, MeshMaterial2d<InstanceMaterial>, MeshTag, Transform);
+type TileBundle = (TileObject, Mesh2d, MeshMaterial2d<InstanceMaterial>, MeshTag, Transform);
 
 /// 一层地形的网格批次。
 type TileBatch = Vec<TileBundle>;
@@ -146,20 +207,30 @@ pub(crate) struct MapAssets<'w> {
     terrain_xml: Res<'w, Assets<TerrainXml>>,
 }
 
-/// 地形层渲染所需的只读数据。
-struct TileContext<'a> {
-    /// 场景数据。
-    btl: &'a Btl,
+/// 地块增量刷新所需的只读资源。
+#[derive(SystemParam)]
+pub(crate) struct RefreshContext<'w> {
+    /// 渲染资源。
+    render: Option<Res<'w, Wc4Render>>,
     /// 世界地形数据。
-    bin: &'a Bin,
+    bin: Option<Res<'w, Bin>>,
+    /// 场景数据。
+    btl: Option<Res<'w, Btl>>,
     /// 地图配置。
-    config: &'a Wc4Config,
+    config: Option<Res<'w, Wc4Config>>,
+    /// 地图资源。
+    resources: Option<Res<'w, Wc4Resources>>,
     /// 图集配置资源。
-    image_xml: &'a Assets<ImageXml>,
-    /// 地形配置资源。
-    terrain_xml: &'a Assets<TerrainXml>,
+    image_xml: Res<'w, Assets<ImageXml>>,
+}
+
+/// 地块增量刷新所需的可写资源。
+#[derive(SystemParam)]
+pub(crate) struct RefreshAssets<'w> {
+    /// 网格资源。
+    meshes: ResMut<'w, Assets<Mesh>>,
     /// 纹理资源。
-    images: &'a Assets<Image>,
+    images: ResMut<'w, Assets<Image>>,
 }
 
 /// 生成 WC4 地图实体。
@@ -177,20 +248,23 @@ pub(crate) fn spawn_wc4_map(
         return;
     };
 
-    let context = TileContext {
-        btl: &btl,
-        bin: &bin,
-        config: &config,
-        image_xml: &assets.image_xml,
-        terrain_xml: &assets.terrain_xml,
-        images: &assets.images,
-    };
-
     // 1) 两层地形图集必须同时就绪，否则留到下一帧整体重试。
-    let Some(terrain_atlas) = prepare_atlas(&context, &resources.terrain) else {
+    let Some(terrain_atlas) = prepare_atlas(
+        &config,
+        &assets.image_xml,
+        &assets.terrain_xml,
+        &assets.images,
+        &resources.terrain,
+    ) else {
         return;
     };
-    let Some(plant_atlas) = prepare_atlas(&context, &resources.plant) else {
+    let Some(plant_atlas) = prepare_atlas(
+        &config,
+        &assets.image_xml,
+        &assets.terrain_xml,
+        &assets.images,
+        &resources.plant,
+    ) else {
         return;
     };
 
@@ -200,22 +274,16 @@ pub(crate) fn spawn_wc4_map(
     }
 
     // 2) 地形、植被与底图。
-    let terrain_batch = tile_batch(
-        &context,
-        &terrain_atlas,
-        assets.instance_materials.add(InstanceMaterial {
-            image: terrain_atlas.image.clone(),
-        }),
-        &mut assets.meshes,
-    );
-    let plant_batch = tile_batch(
-        &context,
-        &plant_atlas,
-        assets.instance_materials.add(InstanceMaterial {
-            image: plant_atlas.image.clone(),
-        }),
-        &mut assets.meshes,
-    );
+    let terrain_material = assets.instance_materials.add(InstanceMaterial {
+        image: terrain_atlas.image.clone(),
+    });
+    let plant_material = assets.instance_materials.add(InstanceMaterial {
+        image: plant_atlas.image.clone(),
+    });
+
+    let terrain_batch =
+        tile_batch(&btl, &bin, &terrain_atlas, &terrain_material, &mut assets.meshes);
+    let plant_batch = tile_batch(&btl, &bin, &plant_atlas, &plant_material, &mut assets.meshes);
     let tile_count = terrain_batch.len() + plant_batch.len();
 
     commands.spawn_batch(terrain_batch);
@@ -223,12 +291,12 @@ pub(crate) fn spawn_wc4_map(
     spawn_land_base(&mut commands, &btl, &resources);
 
     let sea_mask = build_sea_mask(&btl, &bin, &mut assets.images);
-    if let Some(sea_mask) = sea_mask {
+    if let Some(mask) = &sea_mask {
         spawn_sea_base(
             &mut commands,
             &btl,
             &resources,
-            sea_mask,
+            mask.clone(),
             &mut assets.meshes,
             &mut assets.sea_materials,
         );
@@ -243,6 +311,16 @@ pub(crate) fn spawn_wc4_map(
         Sprite::from_image(resources.cursor.clone()),
         Transform::from_xyz(0.0, 0.0, Z_TILE_CURSOR),
     ));
+    commands.spawn((
+        SelectionMarker,
+        Sprite {
+            image: resources.cursor.clone(),
+            color: SELECTION_TINT,
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, Z_TILE_SELECTION),
+        Visibility::Hidden,
+    ));
 
     info!(
         "WC4 地图已生成: {}×{}，{} 个地形网格，{} 个城市",
@@ -252,16 +330,29 @@ pub(crate) fn spawn_wc4_map(
         btl.city_vec.len()
     );
 
+    commands.insert_resource(Wc4Render {
+        terrain: terrain_atlas,
+        plant: plant_atlas,
+        terrain_material,
+        plant_material,
+        sea_mask,
+    });
     commands.insert_resource(Wc4MapSpawned);
 }
 
 /// 准备单层地形的图集数据。
 ///
 /// 任一依赖资源尚未加载时返回 `None`。
-fn prepare_atlas(context: &TileContext, atlas: &Wc4Atlas) -> Option<PreparedAtlas> {
-    let image_doc = context.image_xml.get(&atlas.image_xml)?;
-    let terrain_doc = context.terrain_xml.get(&context.config.terrain_xml)?;
-    let texture = context.images.get(&atlas.image)?;
+fn prepare_atlas(
+    config: &Wc4Config,
+    image_xml: &Assets<ImageXml>,
+    terrain_xml: &Assets<TerrainXml>,
+    images: &Assets<Image>,
+    atlas: &Wc4Atlas,
+) -> Option<PreparedAtlas> {
+    let image_doc = image_xml.get(&atlas.image_xml)?;
+    let terrain_doc = terrain_xml.get(&config.terrain_xml)?;
+    let texture = images.get(&atlas.image)?;
     let texture_size = Vec2::new(texture.width() as f32, texture.height() as f32);
 
     if texture_size.min_element() <= 0.0 {
@@ -302,83 +393,91 @@ fn terrain_frames(
 
 /// 生成地形网格批次。
 fn tile_batch(
-    context: &TileContext,
+    btl: &Btl,
+    bin: &Bin,
     atlas: &PreparedAtlas,
-    material: Handle<InstanceMaterial>,
+    material: &Handle<InstanceMaterial>,
     meshes: &mut Assets<Mesh>,
 ) -> TileBatch {
-    let frames = &atlas.frames;
-    let texture_size = atlas.texture_size;
     let mut batch = Vec::new();
-    let master = &context.btl.master;
 
-    for row in 0..master.map_height {
-        for column in 0..master.map_width {
-            let position = grid_to_world(column, row);
-
-            let Some(x) = master.map_capture_x.checked_add(column) else {
-                continue;
-            };
-            let Some(y) = master.map_capture_y.checked_add(row) else {
-                continue;
-            };
-            let Some(index) = context.bin.index(x, y) else {
-                continue;
-            };
-            let Some(topography) = context.bin.topographies.get(index) else {
-                continue;
-            };
-
-            let row_bias = y as f32 * Z_ROW_BIAS;
-            let column_bias = x as f32 * Z_COLUMN_BIAS;
-
-            // 依次匹配基础层、装饰 A 与装饰 B，顺序与 Z_TILE_LAYERS 一致。
-            for (layer, (kind, id, offset)) in [
-                (
-                    i32::from(topography.r#type),
-                    i32::from(topography.id),
-                    Vec2::new(f32::from(topography.x), f32::from(topography.y)),
-                ),
-                (
-                    i32::from(topography.decoration_a),
-                    i32::from(topography.decoration_a_id),
-                    Vec2::new(
-                        f32::from(topography.decoration_a_x),
-                        f32::from(topography.decoration_a_y),
-                    ),
-                ),
-                (
-                    i32::from(topography.decoration_b),
-                    i32::from(topography.decoration_b_id),
-                    Vec2::new(
-                        f32::from(topography.decoration_b_x),
-                        f32::from(topography.decoration_b_y),
-                    ),
-                ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let Some(frame) = frames.get(&(kind, id)) else {
-                    continue;
-                };
-                let frame_offset = frame.center_offset() + Vec2::new(offset.x, -offset.y);
-
-                batch.push((
-                    Mesh2d(meshes.add(quad_mesh(*frame, texture_size))),
-                    MeshMaterial2d(material.clone()),
-                    MeshTag::new(index as u32),
-                    Transform::from_xyz(
-                        position.x + frame_offset.x,
-                        position.y + frame_offset.y,
-                        row_bias + column_bias + Z_TILE_LAYERS[layer],
-                    ),
-                ));
-            }
+    for row in 0..btl.master.map_height {
+        for column in 0..btl.master.map_width {
+            tile_layers(btl, bin, atlas, material, IVec2::new(column, row), meshes, &mut batch);
         }
     }
 
     batch
+}
+
+/// 生成指定地块在单个图集中的全部网格实体。
+fn tile_layers(
+    btl: &Btl,
+    bin: &Bin,
+    atlas: &PreparedAtlas,
+    material: &Handle<InstanceMaterial>,
+    grid: IVec2,
+    meshes: &mut Assets<Mesh>,
+    batch: &mut TileBatch,
+) {
+    let master = &btl.master;
+    let Some(x) = master.map_capture_x.checked_add(grid.x) else {
+        return;
+    };
+    let Some(y) = master.map_capture_y.checked_add(grid.y) else {
+        return;
+    };
+    let Some(index) = bin.index(x, y) else {
+        return;
+    };
+    let Some(topography) = bin.topographies.get(index) else {
+        return;
+    };
+
+    let position = grid_to_world(grid.x, grid.y);
+    let row_bias = y as f32 * Z_ROW_BIAS;
+    let column_bias = x as f32 * Z_COLUMN_BIAS;
+
+    // 依次匹配基础层、装饰 A 与装饰 B，顺序与 Z_TILE_LAYERS 一致。
+    for (layer, (kind, id, offset)) in [
+        (
+            i32::from(topography.r#type),
+            i32::from(topography.id),
+            Vec2::new(f32::from(topography.x), f32::from(topography.y)),
+        ),
+        (
+            i32::from(topography.decoration_a),
+            i32::from(topography.decoration_a_id),
+            Vec2::new(f32::from(topography.decoration_a_x), f32::from(topography.decoration_a_y)),
+        ),
+        (
+            i32::from(topography.decoration_b),
+            i32::from(topography.decoration_b_id),
+            Vec2::new(f32::from(topography.decoration_b_x), f32::from(topography.decoration_b_y)),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Some(frame) = atlas.frames.get(&(kind, id)) else {
+            continue;
+        };
+        let frame_offset = frame.center_offset() + Vec2::new(offset.x, -offset.y);
+
+        batch.push((
+            TileObject {
+                grid,
+            },
+            Mesh2d(meshes.add(quad_mesh(*frame, atlas.texture_size))),
+            MeshMaterial2d(material.clone()),
+            MeshTag::new(index as u32),
+            Transform::from_xyz(
+                position.x + frame_offset.x,
+                position.y + frame_offset.y,
+                row_bias + column_bias + Z_TILE_LAYERS[layer],
+            ),
+        ));
+    }
 }
 
 /// 创建带 UV 区域的四边形网格。
@@ -488,10 +587,10 @@ fn map_extent(btl: &Btl) -> Option<MapExtent> {
     })
 }
 
-/// 生成海洋遮罩纹理。
+/// 计算海洋遮罩像素数据。
 ///
 /// 每个像素对应一个地块：水域透明，陆地不透明。
-fn build_sea_mask(btl: &Btl, bin: &Bin, images: &mut Assets<Image>) -> Option<Handle<Image>> {
+fn sea_mask_pixels(btl: &Btl, bin: &Bin) -> Option<Vec<u8>> {
     let master = &btl.master;
     let extent = map_extent(btl)?;
     let pixel_count =
@@ -517,19 +616,107 @@ fn build_sea_mask(btl: &Btl, bin: &Bin, images: &mut Assets<Image>) -> Option<Ha
         }
     }
 
+    Some(pixels)
+}
+
+/// 生成海洋遮罩纹理。
+fn build_sea_mask(btl: &Btl, bin: &Bin, images: &mut Assets<Image>) -> Option<Handle<Image>> {
+    let pixels = sea_mask_pixels(btl, bin)?;
+    let extent = map_extent(btl)?;
     let size = Extent3d {
         width: extent.grid.x,
         height: extent.grid.y,
         depth_or_array_layers: 1,
     };
 
+    // 遮罩需要保留 CPU 数据，以便地形编辑后原地刷新纹理。
     Some(images.add(Image::new(
         size,
         TextureDimension::D2,
         pixels,
         TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
+        RenderAssetUsages::default(),
     )))
+}
+
+/// 用地形数据刷新已有的海洋遮罩纹理。
+fn update_sea_mask(btl: &Btl, bin: &Bin, mask: &Handle<Image>, images: &mut Assets<Image>) {
+    let Some(pixels) = sea_mask_pixels(btl, bin) else {
+        return;
+    };
+    let Some(mut image) = images.get_mut(mask) else {
+        return;
+    };
+
+    image.data = Some(pixels);
+}
+
+/// 城市渲染共用的图集帧、字体与地图数据。
+struct CityScene<'a> {
+    btl: &'a Btl,
+    config: &'a Wc4Config,
+    resources: &'a Wc4Resources,
+    frames: HashMap<(&'a str, u8, u8), ImageFrame>,
+    font: TextFont,
+    width: usize,
+}
+
+impl<'a> CityScene<'a> {
+    /// 构建城市渲染上下文。
+    ///
+    /// 图片图集尚未加载或地图宽度无效时返回 `None`。
+    fn new(
+        btl: &'a Btl,
+        bin: &Bin,
+        config: &'a Wc4Config,
+        resources: &'a Wc4Resources,
+        image_xml: &'a Assets<ImageXml>,
+    ) -> Option<Self> {
+        let buildings = image_xml.get(&resources.buildings.image_xml)?;
+        let width = usize::try_from(bin.info.width).ok().filter(|width| *width > 0)?;
+
+        Some(Self {
+            btl,
+            config,
+            resources,
+            frames: city_frames(buildings),
+            font: TextFont::from_font_size(CITY_LABEL_FONT_SIZE).with_font(resources.font.clone()),
+            width,
+        })
+    }
+
+    /// 返回城市所在的地块坐标。
+    fn grid(&self, city: &City) -> Option<IVec2> {
+        let index = usize::try_from(city.coordinate).ok()?;
+        let map = index_to_grid(index, self.width);
+
+        local_grid(self.btl, map.x, map.y)
+    }
+
+    /// 返回城市外观对应的图片帧。
+    fn frame(&self, city: &City) -> Option<&ImageFrame> {
+        self.frames.get(&city_asset_key(city))
+    }
+
+    /// 返回城市名称文本。
+    fn name(&self, city: &City) -> Option<&str> {
+        self.config.city_names.name(city.name)
+    }
+
+    /// 构建城市外观精灵。
+    fn sprite(&self, frame: &ImageFrame) -> Sprite {
+        Sprite {
+            image: self.resources.buildings.image.clone(),
+            image_mode: SpriteImageMode::Tiled {
+                tile_x: true,
+                tile_y: true,
+                stretch_value: 1.0,
+            },
+            custom_size: Some(Vec2::new(frame.width, frame.height)),
+            rect: Some(frame.rect()),
+            ..default()
+        }
+    }
 }
 
 /// 生成城市精灵与城市名称。
@@ -541,58 +728,217 @@ fn spawn_cities(
     resources: &Wc4Resources,
     image_xml: &Assets<ImageXml>,
 ) {
-    let Some(buildings) = image_xml.get(&resources.buildings.image_xml) else {
+    let Some(scene) = CityScene::new(btl, bin, config, resources, image_xml) else {
         return;
     };
 
-    let frames = city_frames(buildings);
-    let width = match usize::try_from(bin.info.width) {
-        Ok(width) if width > 0 => width,
-        _ => return,
+    for (index, city) in btl.city_vec.iter().enumerate() {
+        let Some(grid) = scene.grid(city) else {
+            continue;
+        };
+
+        spawn_city(commands, index, city, grid, &scene);
+    }
+}
+
+/// 生成单个城市在指定地块上的精灵与名称。
+fn spawn_city(commands: &mut Commands, index: usize, city: &City, grid: IVec2, scene: &CityScene) {
+    let position = grid_to_world(grid.x, grid.y);
+
+    if let Some(bundle) = city_sprite_bundle(index, city, grid, scene) {
+        commands.spawn(bundle);
+    }
+
+    if let Some(name) = scene.name(city) {
+        commands.spawn((
+            CityObject {
+                index,
+                part: CityPart::Label,
+            },
+            CityName,
+            Text2d::new(name),
+            scene.font.clone(),
+            TextLayout::justify(Justify::Center),
+            Transform::from_xyz(position.x, position.y - CITY_LABEL_OFFSET, Z_CITY),
+        ));
+    }
+}
+
+/// 构建城市精灵实体所需的组件。
+///
+/// 图集缺少对应外观时返回 `None`。
+fn city_sprite_bundle(
+    index: usize,
+    city: &City,
+    grid: IVec2,
+    scene: &CityScene,
+) -> Option<(CityObject, Sprite, Transform)> {
+    let frame = scene.frame(city)?;
+    let position = grid_to_world(grid.x, grid.y);
+    let offset = frame.center_offset();
+
+    Some((
+        CityObject {
+            index,
+            part: CityPart::Sprite,
+        },
+        scene.sprite(frame),
+        Transform::from_xyz(position.x + offset.x, position.y + offset.y, Z_CITY),
+    ))
+}
+
+/// 将地图绝对坐标换算为地图内的网格坐标。
+fn local_grid(btl: &Btl, x: i32, y: i32) -> Option<IVec2> {
+    Some(IVec2::new(
+        x.checked_sub(btl.master.map_capture_x)?,
+        y.checked_sub(btl.master.map_capture_y)?,
+    ))
+}
+
+/// 重建被编辑过的地块的渲染实体。
+pub(crate) fn refresh_tiles(
+    mut dirty: ResMut<DirtyTiles>,
+    context: RefreshContext,
+    mut assets: RefreshAssets,
+    objects: Query<(Entity, &TileObject, Option<&Mesh2d>)>,
+    cities: Query<(Entity, &CityObject)>,
+    mut commands: Commands,
+) {
+    if dirty.0.is_empty() {
+        return;
+    }
+
+    // 地图尚未生成时保留待刷新列表，等待渲染资源就绪。
+    let (Some(render), Some(bin), Some(btl)) =
+        (context.render.as_deref(), context.bin.as_deref(), context.btl.as_deref())
+    else {
+        return;
     };
-    let text_font =
-        TextFont::from_font_size(CITY_LABEL_FONT_SIZE).with_font(resources.font.clone());
 
-    for city in &btl.city_vec {
-        let Ok(index) = usize::try_from(city.coordinate) else {
-            continue;
-        };
-        let grid = index_to_grid(index, width);
-        let Some(local_x) = grid.x.checked_sub(btl.master.map_capture_x) else {
-            continue;
-        };
-        let Some(local_y) = grid.y.checked_sub(btl.master.map_capture_y) else {
-            continue;
-        };
-        let position = grid_to_world(local_x, local_y);
+    let grids = std::mem::take(&mut dirty.0);
 
-        if let Some(frame) = frames.get(&city_asset_key(city)) {
-            let offset = frame.center_offset();
-            commands.spawn((
-                Sprite {
-                    image: resources.buildings.image.clone(),
-                    image_mode: SpriteImageMode::Tiled {
-                        tile_x: true,
-                        tile_y: true,
-                        stretch_value: 1.0,
-                    },
-                    custom_size: Some(Vec2::new(frame.width, frame.height)),
-                    rect: Some(frame.rect()),
-                    ..default()
-                },
-                Transform::from_xyz(position.x + offset.x, position.y + offset.y, Z_CITY),
-            ));
+    // 城市精灵不带 `TileObject`，由 `refresh_cities` 就地更新；
+    // 若在此销毁再重建，精灵网格系统针对 `Added<Sprite>` 的延迟插入会命中已释放的实体。
+    for (entity, object, mesh) in &objects {
+        if !grids.contains(&object.grid) {
+            continue;
         }
 
-        if let Some(name) = config.city_names.name(city.name) {
+        // 每个地块层拥有独立的网格资源，销毁实体时一并释放。
+        if let Some(mesh) = mesh {
+            assets.meshes.remove(mesh.id());
+        }
+        commands.entity(entity).try_despawn();
+    }
+
+    let mut batch = TileBatch::new();
+    for grid in &grids {
+        tile_layers(
+            btl,
+            bin,
+            &render.terrain,
+            &render.terrain_material,
+            *grid,
+            &mut assets.meshes,
+            &mut batch,
+        );
+        tile_layers(
+            btl,
+            bin,
+            &render.plant,
+            &render.plant_material,
+            *grid,
+            &mut assets.meshes,
+            &mut batch,
+        );
+    }
+    commands.spawn_batch(batch);
+
+    if let (Some(config), Some(resources)) =
+        (context.config.as_deref(), context.resources.as_deref())
+        && let Some(scene) = CityScene::new(btl, bin, config, resources, &context.image_xml)
+    {
+        let existing =
+            cities.iter().map(|(entity, city)| ((city.index, city.part), entity)).collect();
+        refresh_cities(&mut commands, &scene, &grids, &existing);
+    }
+
+    if let Some(mask) = &render.sea_mask {
+        update_sea_mask(btl, bin, mask, &mut assets.images);
+    }
+}
+
+/// 更新指定地块上的城市实体。
+///
+/// 已存在的实体只更新组件，避免重复 `Added<Sprite>` 与精灵网格系统的延迟插入竞争。
+fn refresh_cities(
+    commands: &mut Commands,
+    scene: &CityScene,
+    grids: &HashSet<IVec2>,
+    existing: &HashMap<(usize, CityPart), Entity>,
+) {
+    for (index, city) in scene.btl.city_vec.iter().enumerate() {
+        let Some(grid) = scene.grid(city) else {
+            continue;
+        };
+        if !grids.contains(&grid) {
+            continue;
+        }
+
+        refresh_city(commands, index, city, grid, scene, existing);
+    }
+}
+
+/// 更新单个城市在指定地块上的精灵与名称。
+///
+/// 城市实体一旦生成就不再销毁，缺失外观或名称时仅隐藏，
+/// 避开精灵网格系统对 `Added<Sprite>` 的延迟插入与销毁竞争。
+fn refresh_city(
+    commands: &mut Commands,
+    index: usize,
+    city: &City,
+    grid: IVec2,
+    scene: &CityScene,
+    existing: &HashMap<(usize, CityPart), Entity>,
+) {
+    let sprite = existing.get(&(index, CityPart::Sprite)).copied();
+    match (city_sprite_bundle(index, city, grid, scene), sprite) {
+        (Some(bundle), Some(entity)) => {
+            let (_, sprite, transform) = bundle;
+            commands.entity(entity).try_insert((sprite, transform, Visibility::Visible));
+        }
+        (Some(bundle), None) => {
+            commands.spawn(bundle);
+        }
+        (None, Some(entity)) => {
+            commands.entity(entity).try_insert(Visibility::Hidden);
+        }
+        (None, None) => {}
+    }
+
+    let label = existing.get(&(index, CityPart::Label)).copied();
+    match (scene.name(city), label) {
+        (Some(name), Some(entity)) => {
+            commands.entity(entity).try_insert((Text2d::new(name), Visibility::Visible));
+        }
+        (Some(name), None) => {
+            let position = grid_to_world(grid.x, grid.y);
             commands.spawn((
+                CityObject {
+                    index,
+                    part: CityPart::Label,
+                },
                 CityName,
                 Text2d::new(name),
-                text_font.clone(),
+                scene.font.clone(),
                 TextLayout::justify(Justify::Center),
                 Transform::from_xyz(position.x, position.y - CITY_LABEL_OFFSET, Z_CITY),
             ));
         }
+        (None, Some(entity)) => {
+            commands.entity(entity).try_insert(Visibility::Hidden);
+        }
+        (None, None) => {}
     }
 }
 
@@ -681,19 +1027,34 @@ pub(crate) fn update_tile_cursor(
     mut cursor: Single<&mut Transform, With<TileCursor>>,
 ) {
     let (camera, camera_transform) = camera.into_inner();
-    let Some(viewport_position) = window.cursor_position() else {
+    // 光标换算是悬停与点选共用的唯一入口。
+    let Some(grid) = cursor_to_grid(&window, camera, camera_transform) else {
         return;
     };
-    let Ok(world_position) = camera.viewport_to_world_2d(camera_transform, viewport_position)
-    else {
-        return;
-    };
-
-    let grid = world_to_grid(world_position);
     let center = grid_to_world(grid.x, grid.y);
     let z = cursor.translation.z;
 
     cursor.translation = Vec3::new(center.x, center.y, z);
+}
+
+/// 将选中标记移动到当前选中的地块。
+pub(crate) fn update_selection_marker(
+    selected: Res<SelectedTile>,
+    mut marker: Query<(&mut Transform, &mut Visibility), With<SelectionMarker>>,
+) {
+    let Ok((mut transform, mut visibility)) = marker.single_mut() else {
+        return;
+    };
+
+    let Some(grid) = selected.get() else {
+        *visibility = Visibility::Hidden;
+        return;
+    };
+
+    let center = grid_to_world(grid.x, grid.y);
+    transform.translation.x = center.x;
+    transform.translation.y = center.y;
+    *visibility = Visibility::Visible;
 }
 
 /// 地形图集材质。

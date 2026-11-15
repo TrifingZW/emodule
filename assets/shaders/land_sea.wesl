@@ -9,7 +9,7 @@ struct LandSeaParams {
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var base_color_texture: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var base_color_sampler: sampler;
-@group(constants::MATERIAL_BIND_GROUP) @binding(2) var sea_mask_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var tile_mask_texture: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> params: LandSeaParams;
 
 // 相邻列的中心间距与六边形宽度之比。
@@ -26,7 +26,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         return textureSample(base_color_texture, base_color_sampler, mesh.uv);
     }
 
-    let mask: vec4<f32> = textureLoad(sea_mask_texture, grid, 0);
+    let mask: vec4<f32> = textureLoad(tile_mask_texture, grid, 0);
 
     // 遮罩 alpha 非零表示陆地，直接丢弃片元。
     if (mask.a != 0.0) {

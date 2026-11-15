@@ -2,7 +2,7 @@
 
 use bevy::{
     asset::{Asset, AssetServer},
-    image::Image,
+    image::{Image, ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor},
     prelude::*,
     reflect::TypePath,
 };
@@ -12,9 +12,9 @@ use serde::Deserialize;
 const TERRAIN_XML_PATH: &str = "terrain_hd.xml";
 /// 地形图集图片。
 const TERRAIN_IMAGE_PATH: &str = "terrain_hd.webp";
-/// 植被图集配置。
+/// 第二套地形图集配置（植被类地形美术）。
 const PLANT_XML_PATH: &str = "plant_hd.xml";
-/// 植被图集图片。
+/// 第二套地形图集图片。
 const PLANT_IMAGE_PATH: &str = "plant_hd.png";
 /// 建筑图集配置。
 const BUILDINGS_XML_PATH: &str = "buildings_hd.xml";
@@ -75,7 +75,7 @@ pub(crate) struct Wc4Atlas {
 pub(crate) struct Wc4Resources {
     /// 地形图集。
     pub(crate) terrain: Wc4Atlas,
-    /// 植被图集。
+    /// 第二套地形图集（植被类地形美术）。
     pub(crate) plant: Wc4Atlas,
     /// 建筑图集。
     pub(crate) buildings: Wc4Atlas,
@@ -98,7 +98,17 @@ pub(crate) fn load_wc4_resources(mut commands: Commands, asset_server: Res<Asset
         terrain: atlas(TERRAIN_XML_PATH, TERRAIN_IMAGE_PATH),
         plant: atlas(PLANT_XML_PATH, PLANT_IMAGE_PATH),
         buildings: atlas(BUILDINGS_XML_PATH, BUILDINGS_IMAGE_PATH),
-        land: asset_server.load(LAND_IMAGE_PATH),
+        land: asset_server
+            .load_builder()
+            .with_settings(|settings: &mut ImageLoaderSettings| {
+                // 地皮在整张地图上反复平铺，采样必须跨过纹理边界重复。
+                settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                    address_mode_u: ImageAddressMode::Repeat,
+                    address_mode_v: ImageAddressMode::Repeat,
+                    ..ImageSamplerDescriptor::linear()
+                });
+            })
+            .load(LAND_IMAGE_PATH),
         sea: asset_server.load(SEA_IMAGE_PATH),
         cursor: asset_server.load(CURSOR_IMAGE_PATH),
     });

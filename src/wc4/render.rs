@@ -21,12 +21,14 @@ use crate::{
     wc4::{
         bin::Bin,
         btl::Btl,
-        btl_data::City,
+        btl_data::{City, Country},
         config::{TerrainXml, Wc4Config},
         grid::{
             GRID_HEIGHT, GRID_WIDTH, cursor_to_grid, grid_to_world, grid_world_size, index_to_grid,
         },
+        owner::TileOwners,
         resource::{ImageInfo, ImageXml, Wc4Atlas, Wc4Resources},
+        tile::{grid_position, water_at},
     },
 };
 
@@ -46,9 +48,9 @@ const Z_ROW_BIAS: f32 = 0.001;
 const Z_COLUMN_BIAS: f32 = 0.000_001;
 /// 地形层（基础 > 装饰 A > 装饰 B）的相对深度。
 const Z_TILE_LAYERS: [f32; 3] = [3.0, 2.0, 1.0];
-/// 网格覆盖层的深度，位于地块及其颜色层之上、城市与交互标记之下。
+/// 网格覆盖层的深度，位于地形层之上、界线与交互标记之下。
 pub(crate) const Z_GRID: f32 = 4.5;
-/// 省界覆盖层的深度，位于网格之上、城市与交互标记之下。
+/// 省界覆盖层的深度，位于城市与交互标记之下。
 pub(crate) const Z_PROVINCE_BOUNDARIES: f32 = 4.75;
 /// 城市名称与城市精灵的距离。
 const CITY_LABEL_OFFSET: f32 = 50.0;
@@ -57,6 +59,8 @@ const CITY_LABEL_FONT_SIZE: f32 = 16.0;
 
 /// 地形图集着色器路径。
 const INSTANCE_SHADER_PATH: &str = "shaders/automatic_instancing.wesl";
+/// 陆地底图着色器路径。
+const LAND_BASE_SHADER_PATH: &str = "shaders/land_base.wesl";
 /// 海洋遮罩着色器路径。
 const SEA_SHADER_PATH: &str = "shaders/land_sea.wesl";
 
@@ -120,14 +124,14 @@ impl DirtyTiles {
 pub(crate) struct Wc4Render {
     /// 地形图集。
     terrain: PreparedAtlas,
-    /// 植被图集。
+    /// 第二套地形图集（植被类地形美术）。
     plant: PreparedAtlas,
     /// 地形材质。
-    terrain_material: Handle<InstanceMaterial>,
-    /// 植被材质。
-    plant_material: Handle<InstanceMaterial>,
-    /// 海洋遮罩纹理。
-    sea_mask: Option<Handle<Image>>,
+    terrain_materials: TileMaterials,
+    /// 第二套地形材质。
+    plant_materials: TileMaterials,
+    /// 地块遮罩纹理，RGB 为国家配色、alpha 标记陆地。
+    tile_mask: Option<Handle<Image>>,
 }
 
 /// 单个地形网格实体所需的组件。
@@ -144,6 +148,61 @@ struct PreparedAtlas {
     frames: HashMap<(i32, i32), ImageFrame>,
     /// 图集纹理尺寸。
     texture_size: Vec2,
+}
+
+/// 生成地块实体所需的场景数据。
+#[derive(Clone, Copy)]
+struct TileScene<'a> {
+    /// 场景数据。
+    btl: &'a Btl,
+    /// 世界地形数据。
+    bin: &'a Bin,
+    /// 地图区域内的地块归属国家。
+    owners: &'a TileOwners,
+}
+
+/// 地块图集的材质集合。
+///
+/// 两套地形图集（山地类与植被类美术）共用同一套国家材质，
+/// 它们合起来才是完整的地形，必须使用完全一致的配色。
+struct TileMaterials {
+    /// 无归属地块使用的材质。
+    neutral: Handle<InstanceMaterial>,
+    /// 按归属值索引的国家材质。
+    countries: Vec<Handle<InstanceMaterial>>,
+}
+
+impl TileMaterials {
+    /// 按国家融合色表创建材质，下标与 `Btl::belong_vec` 的取值一致。
+    fn by_country(
+        image: Handle<Image>,
+        tints: &[Vec4],
+        materials: &mut Assets<InstanceMaterial>,
+    ) -> Self {
+        let neutral = materials.add(InstanceMaterial {
+            image: image.clone(),
+            tint: Vec4::ONE,
+        });
+        let countries = tints
+            .iter()
+            .map(|&tint| {
+                materials.add(InstanceMaterial {
+                    image: image.clone(),
+                    tint,
+                })
+            })
+            .collect();
+
+        Self {
+            neutral,
+            countries,
+        }
+    }
+
+    /// 返回地块使用的材质，无归属或归属值越界时保持图集原色。
+    fn handle(&self, belong: Option<u8>) -> &Handle<InstanceMaterial> {
+        belong.and_then(|belong| self.countries.get(usize::from(belong))).unwrap_or(&self.neutral)
+    }
 }
 
 /// 图集中单张图片的像素区域与锚点。
@@ -206,6 +265,8 @@ pub(crate) struct MapAssets<'w> {
     instance_materials: ResMut<'w, Assets<InstanceMaterial>>,
     /// 海洋材质资源。
     sea_materials: ResMut<'w, Assets<SeaMaterial>>,
+    /// 陆地底图材质资源。
+    land_materials: ResMut<'w, Assets<LandBaseMaterial>>,
     /// 图集配置资源。
     image_xml: Res<'w, Assets<ImageXml>>,
     /// 地形配置资源。
@@ -281,25 +342,41 @@ pub(crate) fn spawn_wc4_map(
         return;
     }
 
-    // 2) 地形、植被与底图。
-    let terrain_material = assets.instance_materials.add(InstanceMaterial {
-        image: terrain_atlas.image.clone(),
-    });
-    let plant_material = assets.instance_materials.add(InstanceMaterial {
-        image: plant_atlas.image.clone(),
-    });
+    // 地皮的平铺采样需要纹理尺寸，未加载完成时同样等待。
+    let Some(land_size) = assets
+        .images
+        .get(&resources.land)
+        .map(|image| Vec2::new(image.width() as f32, image.height() as f32))
+        .filter(|size| size.min_element() > 0.0)
+    else {
+        return;
+    };
 
-    let terrain_batch =
-        tile_batch(&btl, &bin, &terrain_atlas, &terrain_material, &mut assets.meshes);
-    let plant_batch = tile_batch(&btl, &bin, &plant_atlas, &plant_material, &mut assets.meshes);
-    let tile_count = terrain_batch.len() + plant_batch.len();
+    // 2) 归属、遮罩、地皮与地块。
+    let owners = TileOwners::resolve(&btl, &bin);
+    let tints = country_tints(&btl);
+    let terrain_materials = TileMaterials::by_country(
+        terrain_atlas.image.clone(),
+        &tints,
+        &mut assets.instance_materials,
+    );
+    let plant_materials = TileMaterials::by_country(
+        plant_atlas.image.clone(),
+        &tints,
+        &mut assets.instance_materials,
+    );
 
-    commands.spawn_batch(terrain_batch);
-    commands.spawn_batch(plant_batch);
-    spawn_land_base(&mut commands, &btl, &resources);
-
-    let sea_mask = build_sea_mask(&btl, &bin, &mut assets.images);
-    if let Some(mask) = &sea_mask {
+    let tile_mask = build_tile_mask(&btl, &bin, &owners, &mut assets.images);
+    if let Some(mask) = &tile_mask {
+        spawn_land_base(
+            &mut commands,
+            &btl,
+            &resources,
+            mask.clone(),
+            land_size,
+            &mut assets.meshes,
+            &mut assets.land_materials,
+        );
         spawn_sea_base(
             &mut commands,
             &btl,
@@ -309,8 +386,21 @@ pub(crate) fn spawn_wc4_map(
             &mut assets.sea_materials,
         );
     } else {
-        warn!("WC4 海洋遮罩尺寸无效，已跳过海洋层");
+        warn!("WC4 地块遮罩尺寸无效，已跳过地皮染色与海洋层");
     }
+
+    let tile_scene = TileScene {
+        btl: &btl,
+        bin: &bin,
+        owners: &owners,
+    };
+    let terrain_batch =
+        tile_batch(&tile_scene, &terrain_atlas, &terrain_materials, &mut assets.meshes);
+    let plant_batch = tile_batch(&tile_scene, &plant_atlas, &plant_materials, &mut assets.meshes);
+    let tile_count = terrain_batch.len() + plant_batch.len();
+
+    commands.spawn_batch(terrain_batch);
+    commands.spawn_batch(plant_batch);
 
     // 3) 城市与交互标记。
     spawn_cities(&mut commands, &btl, &bin, &config, &resources, &font, &assets.image_xml);
@@ -331,19 +421,21 @@ pub(crate) fn spawn_wc4_map(
     ));
 
     info!(
-        "WC4 地图已生成: {}×{}，{} 个地形网格，{} 个城市",
+        "WC4 地图已生成: {}×{}，{} 个地形网格，{} 个城市，{} 个国家，{} 个有归属地块",
         btl.master.map_width,
         btl.master.map_height,
         tile_count,
-        btl.city_vec.len()
+        btl.city_vec.len(),
+        btl.country_vec.len(),
+        owners.owned()
     );
 
     commands.insert_resource(Wc4Render {
         terrain: terrain_atlas,
         plant: plant_atlas,
-        terrain_material,
-        plant_material,
-        sea_mask,
+        terrain_materials,
+        plant_materials,
+        tile_mask,
     });
     commands.insert_resource(Wc4MapSpawned);
 }
@@ -401,17 +493,16 @@ fn terrain_frames(
 
 /// 生成地形网格批次。
 fn tile_batch(
-    btl: &Btl,
-    bin: &Bin,
+    scene: &TileScene,
     atlas: &PreparedAtlas,
-    material: &Handle<InstanceMaterial>,
+    materials: &TileMaterials,
     meshes: &mut Assets<Mesh>,
 ) -> TileBatch {
     let mut batch = Vec::new();
 
-    for row in 0..btl.master.map_height {
-        for column in 0..btl.master.map_width {
-            tile_layers(btl, bin, atlas, material, IVec2::new(column, row), meshes, &mut batch);
+    for row in 0..scene.btl.master.map_height {
+        for column in 0..scene.btl.master.map_width {
+            tile_layers(scene, atlas, materials, IVec2::new(column, row), meshes, &mut batch);
         }
     }
 
@@ -420,14 +511,18 @@ fn tile_batch(
 
 /// 生成指定地块在单个图集中的全部网格实体。
 fn tile_layers(
-    btl: &Btl,
-    bin: &Bin,
+    scene: &TileScene,
     atlas: &PreparedAtlas,
-    material: &Handle<InstanceMaterial>,
+    materials: &TileMaterials,
     grid: IVec2,
     meshes: &mut Assets<Mesh>,
     batch: &mut TileBatch,
 ) {
+    let TileScene {
+        btl,
+        bin,
+        owners,
+    } = *scene;
     let master = &btl.master;
     let Some(x) = master.map_capture_x.checked_add(grid.x) else {
         return;
@@ -445,6 +540,9 @@ fn tile_layers(
     let position = grid_to_world(grid.x, grid.y);
     let row_bias = y as f32 * Z_ROW_BIAS;
     let column_bias = x as f32 * Z_COLUMN_BIAS;
+
+    // 只有陆地地形参与国色融合，水域保持图集原色。
+    let material = materials.handle(owners.get(grid).filter(|_| !water_at(btl, bin, grid)));
 
     // 依次匹配基础层、装饰 A 与装饰 B，顺序与 Z_TILE_LAYERS 一致。
     for (layer, (kind, id, offset)) in [
@@ -517,6 +615,20 @@ fn quad_mesh(frame: ImageFrame, texture_size: Vec2) -> Mesh {
         .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]))
 }
 
+/// 构建按归属值索引的国家融合色表。
+fn country_tints(btl: &Btl) -> Vec<Vec4> {
+    btl.country_vec
+        .iter()
+        .map(|country| {
+            let [red, green, blue] = country_rgb(country);
+            // 图集为 sRGB 纹理，其在着色器中已解码为线性值，因此配色同样在线性空间相乘。
+            let color = Color::srgb_u8(red, green, blue).to_linear();
+
+            Vec4::new(color.red, color.green, color.blue, 1.0)
+        })
+        .collect()
+}
+
 /// 地图区域的网格维度与世界尺寸。
 #[derive(Clone, Copy)]
 struct MapExtent {
@@ -527,23 +639,37 @@ struct MapExtent {
 }
 
 /// 生成陆地底图。
-fn spawn_land_base(commands: &mut Commands, btl: &Btl, resources: &Wc4Resources) {
+///
+/// 地皮按纹理原始像素尺寸平铺，再与地块遮罩中的国家配色相乘。
+fn spawn_land_base(
+    commands: &mut Commands,
+    btl: &Btl,
+    resources: &Wc4Resources,
+    tile_mask: Handle<Image>,
+    image_size: Vec2,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<LandBaseMaterial>,
+) {
     let Some(extent) = map_extent(btl) else {
         return;
     };
     let size = extent.world;
 
-    commands.spawn((
-        Sprite {
-            image: resources.land.clone(),
-            image_mode: SpriteImageMode::Tiled {
-                tile_x: true,
-                tile_y: true,
-                stretch_value: 1.0,
-            },
-            custom_size: Some(size),
-            ..default()
+    let material = materials.add(LandBaseMaterial {
+        image: resources.land.clone(),
+        tile_mask,
+        params: LandBaseParams {
+            image_size,
+            size,
+            tile_width: GRID_WIDTH,
+            tile_height: GRID_HEIGHT,
+            grid_size: extent.grid,
         },
+    });
+
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::from_size(size))),
+        MeshMaterial2d(material),
         Transform::from_xyz(size.x / 2.0, -size.y / 2.0, Z_LAND_BASE),
     ));
 }
@@ -553,7 +679,7 @@ fn spawn_sea_base(
     commands: &mut Commands,
     btl: &Btl,
     resources: &Wc4Resources,
-    sea_mask: Handle<Image>,
+    tile_mask: Handle<Image>,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<SeaMaterial>,
 ) {
@@ -564,7 +690,7 @@ fn spawn_sea_base(
 
     let material = materials.add(SeaMaterial {
         image: resources.sea.clone(),
-        sea_mask,
+        tile_mask,
         params: LandSeaParams {
             tile_width: GRID_WIDTH,
             tile_height: GRID_HEIGHT,
@@ -595,10 +721,11 @@ fn map_extent(btl: &Btl) -> Option<MapExtent> {
     })
 }
 
-/// 计算海洋遮罩像素数据。
+/// 计算地块遮罩像素数据。
 ///
-/// 每个像素对应一个地块：水域透明，陆地不透明。
-fn sea_mask_pixels(btl: &Btl, bin: &Bin) -> Option<Vec<u8>> {
+/// 每个像素对应一个地块：RGB 为国家配色（无主与水域为白色），
+/// alpha 标记陆地（不透明）与水域（透明）。
+fn tile_mask_pixels(btl: &Btl, bin: &Bin, owners: &TileOwners) -> Option<Vec<u8>> {
     let master = &btl.master;
     let extent = map_extent(btl)?;
     let pixel_count =
@@ -607,29 +734,51 @@ fn sea_mask_pixels(btl: &Btl, bin: &Bin) -> Option<Vec<u8>> {
 
     for row in 0..master.map_height {
         for column in 0..master.map_width {
-            let alpha = master
-                .map_capture_x
-                .checked_add(column)
-                .zip(master.map_capture_y.checked_add(row))
-                .and_then(|(x, y)| bin.topography(x, y))
-                .map_or(0, |topography| {
-                    if topography.r#type == 1 {
-                        0
-                    } else {
-                        255
-                    }
-                });
+            let water = water_at(btl, bin, IVec2::new(column, row));
+            // 水域不参与地皮染色。
+            let owner = (!water).then(|| owners.get(IVec2::new(column, row))).flatten();
+            let color = country_color(btl, owner);
 
-            pixels.extend_from_slice(&[0, 0, 0, alpha]);
+            pixels.extend_from_slice(&[
+                color[0],
+                color[1],
+                color[2],
+                if water {
+                    0
+                } else {
+                    255
+                },
+            ]);
         }
     }
 
     Some(pixels)
 }
 
-/// 生成海洋遮罩纹理。
-fn build_sea_mask(btl: &Btl, bin: &Bin, images: &mut Assets<Image>) -> Option<Handle<Image>> {
-    let pixels = sea_mask_pixels(btl, bin)?;
+/// 返回归属国家的地图配色，无归属时返回白色。
+fn country_color(btl: &Btl, owner: Option<u8>) -> [u8; 3] {
+    let Some(country) = owner.and_then(|owner| btl.country_vec.get(usize::from(owner))) else {
+        return [u8::MAX; 3];
+    };
+
+    country_rgb(country)
+}
+
+/// 返回国家的 sRGB 地图配色。
+///
+/// 国家配色只在此处读取，材质与遮罩都从这里派生。
+fn country_rgb(country: &Country) -> [u8; 3] {
+    [country.r8, country.g8, country.b8]
+}
+
+/// 生成地块遮罩纹理。
+fn build_tile_mask(
+    btl: &Btl,
+    bin: &Bin,
+    owners: &TileOwners,
+    images: &mut Assets<Image>,
+) -> Option<Handle<Image>> {
+    let pixels = tile_mask_pixels(btl, bin, owners)?;
     let extent = map_extent(btl)?;
     let size = Extent3d {
         width: extent.grid.x,
@@ -647,9 +796,15 @@ fn build_sea_mask(btl: &Btl, bin: &Bin, images: &mut Assets<Image>) -> Option<Ha
     )))
 }
 
-/// 用地形数据刷新已有的海洋遮罩纹理。
-fn update_sea_mask(btl: &Btl, bin: &Bin, mask: &Handle<Image>, images: &mut Assets<Image>) {
-    let Some(pixels) = sea_mask_pixels(btl, bin) else {
+/// 用地形与归属数据刷新已有的地块遮罩纹理。
+fn update_tile_mask(
+    btl: &Btl,
+    bin: &Bin,
+    owners: &TileOwners,
+    mask: &Handle<Image>,
+    images: &mut Assets<Image>,
+) {
+    let Some(pixels) = tile_mask_pixels(btl, bin, owners) else {
         return;
     };
     let Some(mut image) = images.get_mut(mask) else {
@@ -699,7 +854,7 @@ impl<'a> CityScene<'a> {
         let index = usize::try_from(city.coordinate).ok()?;
         let map = index_to_grid(index, self.width);
 
-        local_grid(self.btl, map.x, map.y)
+        grid_position(&self.btl.master, map)
     }
 
     /// 返回城市外观对应的图片帧。
@@ -797,14 +952,6 @@ fn city_sprite_bundle(
     ))
 }
 
-/// 将地图绝对坐标换算为地图内的网格坐标。
-fn local_grid(btl: &Btl, x: i32, y: i32) -> Option<IVec2> {
-    Some(IVec2::new(
-        x.checked_sub(btl.master.map_capture_x)?,
-        y.checked_sub(btl.master.map_capture_y)?,
-    ))
-}
-
 /// 重建被编辑过的地块的渲染实体。
 pub(crate) fn refresh_tiles(
     mut dirty: ResMut<DirtyTiles>,
@@ -827,6 +974,9 @@ pub(crate) fn refresh_tiles(
 
     let grids = std::mem::take(&mut dirty.0);
 
+    // 省份、城市与归属字段都可能被编辑，重建前统一重新解析一次归属。
+    let owners = TileOwners::resolve(btl, bin);
+
     // 城市精灵不带 `TileObject`，由 `refresh_cities` 就地更新；
     // 若在此销毁再重建，精灵网格系统针对 `Added<Sprite>` 的延迟插入会命中已释放的实体。
     for (entity, object, mesh) in &objects {
@@ -841,22 +991,25 @@ pub(crate) fn refresh_tiles(
         commands.entity(entity).try_despawn();
     }
 
+    let tile_scene = TileScene {
+        btl,
+        bin,
+        owners: &owners,
+    };
     let mut batch = TileBatch::new();
     for grid in &grids {
         tile_layers(
-            btl,
-            bin,
+            &tile_scene,
             &render.terrain,
-            &render.terrain_material,
+            &render.terrain_materials,
             *grid,
             &mut assets.meshes,
             &mut batch,
         );
         tile_layers(
-            btl,
-            bin,
+            &tile_scene,
             &render.plant,
-            &render.plant_material,
+            &render.plant_materials,
             *grid,
             &mut assets.meshes,
             &mut batch,
@@ -873,8 +1026,8 @@ pub(crate) fn refresh_tiles(
         refresh_cities(&mut commands, &scene, &grids, &existing);
     }
 
-    if let Some(mask) = &render.sea_mask {
-        update_sea_mask(btl, bin, mask, &mut assets.images);
+    if let Some(mask) = &render.tile_mask {
+        update_tile_mask(btl, bin, &owners, mask, &mut assets.images);
     }
 }
 
@@ -1074,6 +1227,9 @@ pub(crate) struct InstanceMaterial {
     #[texture(0)]
     #[sampler(1)]
     image: Handle<Image>,
+    /// 地块融合色，与图集纹素相乘。
+    #[uniform(2)]
+    tint: Vec4,
 }
 
 impl Material2d for InstanceMaterial {
@@ -1086,7 +1242,7 @@ impl Material2d for InstanceMaterial {
     }
 }
 
-/// 海洋材质的着色器参数。
+/// 地图叠加层的着色器参数。
 #[derive(Clone, Copy, Debug, ShaderType)]
 pub(crate) struct LandSeaParams {
     /// 单个网格的像素宽度。
@@ -1106,9 +1262,9 @@ pub(crate) struct SeaMaterial {
     #[texture(0)]
     #[sampler(1)]
     image: Handle<Image>,
-    /// 海洋遮罩纹理。
+    /// 地块遮罩纹理，RGB 为国家配色、alpha 为陆地标记。
     #[texture(2)]
-    sea_mask: Handle<Image>,
+    tile_mask: Handle<Image>,
     /// 着色器参数。
     #[uniform(3)]
     params: LandSeaParams,
@@ -1121,6 +1277,48 @@ impl Material2d for SeaMaterial {
 
     fn alpha_mode(&self) -> AlphaMode2d {
         // 片元按遮罩 alpha 丢弃，底图需要透明混合。
+        AlphaMode2d::Blend
+    }
+}
+
+/// 陆地底图的着色器参数。
+#[derive(Clone, Copy, Debug, ShaderType)]
+pub(crate) struct LandBaseParams {
+    /// 地皮纹理的像素尺寸。
+    image_size: Vec2,
+    /// 地图区域的世界尺寸。
+    size: Vec2,
+    /// 单个网格的像素宽度。
+    tile_width: f32,
+    /// 单个网格的像素高度。
+    tile_height: f32,
+    /// 地图区域的网格维度。
+    grid_size: UVec2,
+}
+
+/// 陆地底图材质。
+///
+/// 只负责地皮自身的平铺与国家配色，不涉及地形与其他图层。
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub(crate) struct LandBaseMaterial {
+    /// 地皮纹理。
+    #[texture(0)]
+    #[sampler(1)]
+    image: Handle<Image>,
+    /// 地块遮罩纹理，RGB 为国家配色。
+    #[texture(2)]
+    tile_mask: Handle<Image>,
+    /// 着色器参数。
+    #[uniform(3)]
+    params: LandBaseParams,
+}
+
+impl Material2d for LandBaseMaterial {
+    fn fragment_shader() -> ShaderRef {
+        LAND_BASE_SHADER_PATH.into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode2d {
         AlphaMode2d::Blend
     }
 }

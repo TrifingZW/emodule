@@ -103,7 +103,7 @@ pub(crate) struct Master {
 }
 
 /// 国家数据。
-#[derive(Debug, Encode, Decode)]
+#[derive(Debug, Default, Encode, Decode)]
 pub(crate) struct Country {
     /// 序号
     pub(crate) serial_number: i32,

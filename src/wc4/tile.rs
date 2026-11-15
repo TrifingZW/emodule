@@ -68,6 +68,22 @@ pub(crate) fn province_at(btl: &Btl, bin: &Bin, grid: IVec2) -> Option<i16> {
     btl.province_vec.get(scene_index(btl, bin, grid)?).copied()
 }
 
+/// 返回地块所属国家，坐标或数据不可用时返回 `None`。
+pub(crate) fn belong_at(btl: &Btl, bin: &Bin, grid: IVec2) -> Option<u8> {
+    btl.belong_vec.get(scene_index(btl, bin, grid)?).copied()
+}
+
+/// 返回地块是否为水域。
+///
+/// 地形数据缺失或坐标越界时同样视为水域，与地块遮罩的约定一致。
+pub(crate) fn water_at(btl: &Btl, bin: &Bin, grid: IVec2) -> bool {
+    let Some(map) = map_position(&btl.master, grid) else {
+        return true;
+    };
+
+    bin.topography(map.x, map.y).is_none_or(|topography| topography.r#type == 1)
+}
+
 /// 读取地块字段值。
 ///
 /// 网格坐标无效或字段不存在时返回 `None`。
@@ -89,7 +105,7 @@ pub(crate) fn tile_field_value(btl: &Btl, bin: &Bin, grid: IVec2, field: usize) 
         10 => i32::from(topography.decoration_b_x),
         11 => i32::from(topography.decoration_b_y),
         12 => i32::from(*btl.province_vec.get(scene_index(btl, bin, grid)?)?),
-        13 => i32::from(*btl.belong_vec.get(scene_index(btl, bin, grid)?)?),
+        13 => i32::from(belong_at(btl, bin, grid)?),
         _ => return None,
     })
 }
@@ -167,6 +183,18 @@ pub(super) fn map_position(master: &Master, grid: IVec2) -> Option<IVec2> {
         master.map_capture_x.checked_add(grid.x)?,
         master.map_capture_y.checked_add(grid.y)?,
     ))
+}
+
+/// 将地图绝对坐标换算为地图区域内的网格坐标，越界时返回 `None`。
+pub(super) fn grid_position(master: &Master, map: IVec2) -> Option<IVec2> {
+    let grid = IVec2::new(
+        map.x.checked_sub(master.map_capture_x)?,
+        map.y.checked_sub(master.map_capture_y)?,
+    );
+
+    map_position(master, grid)?;
+
+    Some(grid)
 }
 
 /// 返回网格坐标在地形数据中的行优先索引。

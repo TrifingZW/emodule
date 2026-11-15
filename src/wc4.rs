@@ -12,6 +12,7 @@ mod codec;
 mod config;
 mod grid;
 mod numeric;
+mod owner;
 mod render;
 mod resource;
 pub(crate) mod selection;
@@ -41,8 +42,8 @@ use crate::wc4::{
     btl::load_wc4_btl,
     config::{TerrainXml, load_wc4_config},
     render::{
-        InstanceMaterial, SeaMaterial, Wc4MapSpawned, spawn_wc4_map, update_city_label_scale,
-        update_selection_marker, update_tile_cursor,
+        InstanceMaterial, LandBaseMaterial, SeaMaterial, Wc4MapSpawned, spawn_wc4_map,
+        update_city_label_scale, update_selection_marker, update_tile_cursor,
     },
     resource::{ImageXml, load_wc4_resources},
 };
@@ -111,6 +112,7 @@ impl Plugin for Wc4Plugin {
             XmlAssetPlugin::<TerrainXml>::new(&["xml"]),
             XmlAssetPlugin::<ImageXml>::new(&["xml"]),
             Material2dPlugin::<InstanceMaterial>::default(),
+            Material2dPlugin::<LandBaseMaterial>::default(),
             Material2dPlugin::<SeaMaterial>::default(),
         ))
         .init_resource::<DirtyTiles>()

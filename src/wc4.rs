@@ -32,9 +32,13 @@ pub(crate) use attachments::{
 pub(crate) use bin::Bin;
 pub(crate) use btl::Btl;
 pub(crate) use grid::{INNER_RADIUS, OUTER_RADIUS, grid_to_world};
-pub(crate) use render::{DirtyTiles, Z_GRID, Z_PROVINCE_BOUNDARIES, refresh_tiles};
+pub(crate) use owner::TileOwners;
+pub(crate) use render::{
+    DirtyTiles, Z_COUNTRY_BOUNDARIES, Z_GRID, Z_PROVINCE_BOUNDARIES, refresh_tiles,
+};
 pub(crate) use tile::{
     TileSummary, province_at, set_tile_field, tile_field_names, tile_field_value, tile_summary,
+    water_at,
 };
 
 use crate::wc4::{

@@ -16,6 +16,7 @@ use bevy::{
 };
 
 use crate::font::EditorFontPlugin;
+use crate::map::MapOverlayPlugin;
 use crate::state::{EditorState, SelectedTile};
 use crate::ui::VIEWPORT_CLEAR_COLOR;
 use crate::wc4::Wc4Plugin;
@@ -50,6 +51,7 @@ fn main() {
             }),
             FeathersPlugins,
             EditorFontPlugin,
+            MapOverlayPlugin,
             Wc4Plugin,
         ))
         .insert_resource(FallbackErrorHandler(handle_error))
@@ -61,8 +63,6 @@ fn main() {
         .add_systems(
             Update,
             (
-                map::draw_grid,
-                map::draw_province_boundaries,
                 ui::update_status.run_if(resource_changed::<EditorState>),
                 ui::update_tile_details
                     .run_if(resource_changed::<SelectedTile>)

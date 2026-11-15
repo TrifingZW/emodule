@@ -14,7 +14,10 @@ use bevy::{
 
 use crate::{
     camera::{MapViewport, pan_camera, zoom_camera},
-    state::{Tool, ToolButton, on_grid_change, on_province_change, on_tool_activate},
+    state::{
+        Tool, ToolButton, on_country_change, on_grid_change, on_line_width_change,
+        on_province_change, on_tool_activate,
+    },
     ui::BORDER_RADIUS,
     wc4::selection::select_tile_on_click,
 };
@@ -103,6 +106,18 @@ fn viewport_toolbar() -> impl Scene {
             }
             on(checkbox_self_update)
             on(on_province_change)
+            --
+            @FeathersCheckbox {
+                @caption: bsn! { @caption("国界") },
+            }
+            on(checkbox_self_update)
+            on(on_country_change)
+            --
+            @FeathersCheckbox {
+                @caption: bsn! { @caption("固定线宽") },
+            }
+            on(checkbox_self_update)
+            on(on_line_width_change)
         ]
     }
 }

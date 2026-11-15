@@ -37,7 +37,9 @@ impl Tool {
 pub(crate) struct EditorState {
     tool: Tool,
     show_grid: bool,
+    fixed_line_width: bool,
     show_provinces: bool,
+    show_countries: bool,
 }
 
 impl Default for EditorState {
@@ -46,7 +48,9 @@ impl Default for EditorState {
         Self {
             tool: Tool::default(),
             show_grid: false,
+            fixed_line_width: false,
             show_provinces: false,
+            show_countries: false,
         }
     }
 }
@@ -57,9 +61,22 @@ impl EditorState {
         self.show_grid
     }
 
+    /// 返回覆盖层线宽是否固定为屏幕像素。
+    ///
+    /// `true` 时线宽不随视角缩放，`false` 时按世界尺寸固定并与地图一同缩放，
+    /// 对网格、省界与国界同时生效。
+    pub(crate) const fn line_width_fixed(&self) -> bool {
+        self.fixed_line_width
+    }
+
     /// 返回省界是否启用。
     pub(crate) const fn province_boundaries_enabled(&self) -> bool {
         self.show_provinces
+    }
+
+    /// 返回国界是否启用。
+    pub(crate) const fn country_boundaries_enabled(&self) -> bool {
+        self.show_countries
     }
 
     /// 将当前状态格式化为状态栏文本。
@@ -125,9 +142,19 @@ pub(crate) fn on_grid_change(change: On<ValueChange<bool>>, mut state: ResMut<Ed
     state.show_grid = change.value;
 }
 
+/// 更新覆盖层线宽是否固定。
+pub(crate) fn on_line_width_change(change: On<ValueChange<bool>>, mut state: ResMut<EditorState>) {
+    state.fixed_line_width = change.value;
+}
+
 /// 更新省界可见性。
 pub(crate) fn on_province_change(change: On<ValueChange<bool>>, mut state: ResMut<EditorState>) {
     state.show_provinces = change.value;
+}
+
+/// 更新国界可见性。
+pub(crate) fn on_country_change(change: On<ValueChange<bool>>, mut state: ResMut<EditorState>) {
+    state.show_countries = change.value;
 }
 
 #[cfg(test)]
@@ -147,7 +174,9 @@ mod tests {
         let state = EditorState {
             tool: Tool::Rotate,
             show_grid: true,
+            fixed_line_width: false,
             show_provinces: false,
+            show_countries: false,
         };
 
         assert_eq!(state.status_line(), "Tool: Rotate | Grid: On");
